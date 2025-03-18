@@ -7,6 +7,14 @@ class DuckAce:
         self.baud = 115200
         self.__request_id = 0
 
+        self.__read_timeout = 5
+
+        self.__ace_pro_to_toolhead_bowden_length = 100
+        self.__hub_to_toolhead_bowden_length = 100
+
+        self.gcode = self.printer.lookup_object('gcode')
+        self.saved_vars = self.printer.lookup_object('save_variables').all_variables()
+
         self.__filaments_info = [
             {"position": -1, "status": "empty"},
             {"position": -1, "status": "empty"},
@@ -14,10 +22,8 @@ class DuckAce:
             {"position": -1, "status": "empty"},
         ]
 
-        self.__read_timeout = 5
-
-        self.__ace_pro_to_toolhead_bowden_length = 100
-        self.__hub_to_toolhead_bowden_length = 100
+        for i in range(0, 4):
+            self.__filaments_info[i]["position"] = self.saved_vars.get(f"ace_filament_{i}_position", 0)
 
     def start(self):
         print(f"ACE: Connecting to {self.serial_name}")
@@ -115,7 +121,7 @@ class DuckAce:
         print(f"[ACE] <<< {result}")
         return result
 
-    def _read_serial(self):
+    def __read_serial(self):
         max_retries = 3
         retry_delay = 1
         self._data = None
@@ -132,7 +138,7 @@ class DuckAce:
         return self._data
 
     def _get_from_ace(self):
-        thread = threading.Thread(target=self._read_serial, daemon=True)
+        thread = threading.Thread(target=self.__read_serial, daemon=True)
         thread.start()
         thread.join(self.__read_timeout)
 
@@ -305,8 +311,8 @@ class DuckAce:
         if index < 0 or index >= 4:
             print("Wrong index")
 
-        # if self.__filaments_info[index]["position"] <= 0:
-        #     error_handle()
+        if self.__filaments_info[index]["position"] <= 0:
+            error_handle()
 
         if not self.__is_ready(index=index):
             print(
@@ -334,6 +340,9 @@ class DuckAce:
             if self.__filaments_info[i]["position"] - self.__ace_pro_to_toolhead_bowden_length <= 0:
                 self.cmd_ACE_RETRACT(i, self.__filaments_info[i]["position"])
                 from_index = i
+
+        if from_index == to_index:
+            return
 
         if from_index != -1:
             self.cmd_ACE_RETRACT(from_index, self.__hub_to_toolhead_bowden_length + 20)
