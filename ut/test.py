@@ -184,12 +184,18 @@ class DuckAce:
             time.sleep(0.5)
 
     def __wait_action_finish(self, timeout):
-        thread = threading.Thread(target=self.__loop_get_status, daemon=True)
-        thread.start()
-        thread.join(timeout=timeout)
+        start_time = time.localtime().tm_sec
+        
+        while True:
+            if time.localtime().tm_sec - start_time > timeout:
+                # TODO: Timeout handle
+                errorhandle()
 
-        if thread.is_alive():
-            raise TimeoutError("读取超时！")
+            data = self._get_status()["result"]
+            if data["status"] != "busy":
+                break
+
+            time.sleep(0.5)
 
     def __enable_feed_assist(self, index):
         send_id = self.__send_to_ace(
