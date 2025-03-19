@@ -12,8 +12,8 @@ class DuckAce:
         self.__ace_pro_to_toolhead_bowden_length = 100
         self.__hub_to_toolhead_bowden_length = 100
 
-        self.gcode = self.printer.lookup_object('gcode')
-        self.saved_vars = self.printer.lookup_object('save_variables').all_variables()
+        # self.gcode = self.printer.lookup_object('gcode')
+        # self.saved_vars = self.printer.lookup_object('save_variables').all_variables()
 
         self.__filaments_info = [
             {"position": -1, "status": "empty"},
@@ -22,8 +22,8 @@ class DuckAce:
             {"position": -1, "status": "empty"},
         ]
 
-        for i in range(0, 4):
-            self.__filaments_info[i]["position"] = self.saved_vars.get(f"ace_filament_{i}_position", 0)
+        # for i in range(0, 4):
+        #     self.__filaments_info[i]["position"] = self.saved_vars.get(f"ace_filament_{i}_position", 0)
 
     def start(self):
         print(f"ACE: Connecting to {self.serial_name}")
@@ -317,8 +317,8 @@ class DuckAce:
         if index < 0 or index >= 4:
             print("Wrong index")
 
-        if self.__filaments_info[index]["position"] <= 0:
-            error_handle()
+        # if self.__filaments_info[index]["position"] <= 0:
+        #     error_handle()
 
         if not self.__is_ready(index=index):
             print(
@@ -366,7 +366,7 @@ if __name__ == "__main__":
     ace.cmd_GET_FILAMENT_INFO()
 
     # ace.cmd_ACE_FEED(0, 20)
-    time.sleep(1)
+    time.sleep(5)
     ace.cmd_ACE_RETRACT(2, 200)
     time.sleep(1)
     # ace.cmd_ACE_FEED(2, 20)
