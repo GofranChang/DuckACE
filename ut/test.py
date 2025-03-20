@@ -1,11 +1,11 @@
 import serial, threading, time, logging, json, struct, queue, traceback
-
+import datetime
 
 class DuckAce:
     def __init__(self):
         self.serial_name = "/dev/serial/by-id/usb-ANYCUBIC_ACE_1-if00"
         self.baud = 115200
-        self.__request_id = 0
+        self.__request_id = 16380
 
         self.__read_timeout = 5
 
@@ -32,7 +32,7 @@ class DuckAce:
         self._connected = False
         for i in range(0, 10):
             try:
-                self._serial = serial.Serial(port=self.serial_name, baudrate=self.baud)
+                self._serial = serial.Serial(port=self.serial_name, baudrate=self.baud, timeout=2)
 
                 if self._serial.isOpen():
                     self._connected = True
@@ -73,7 +73,9 @@ class DuckAce:
 
         payload = json.dumps(request)
 
-        print(f"[ACE] >>> {payload}")
+        now = datetime.datetime.now()
+        formatted_time = now.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{formatted_time} [ACE] >>> {payload}")
         payload = bytes(payload, "utf-8")
 
         data = bytes([0xFF, 0xAA])
@@ -103,7 +105,7 @@ class DuckAce:
         # 提取 CRC
         crc_received = data[4 + payload_length : 4 + payload_length + 2]
 
-        # TODO: add crc check
+        # TODO: ahreadd crc check
         # computed_crc = struct.pack('@H', self.__calc_crc(payload))
         # if computed_crc != crc_received:
         #     print("CRC 校验失败")
@@ -118,10 +120,12 @@ class DuckAce:
             illegal_id = result["id"]
             print(f"UNKNOWN ace pro id {illegal_id}, except {request_id}")
 
-        print(f"[ACE] <<< {result}")
+        now = datetime.datetime.now()
+        formatted_time = now.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"{formatted_time} [ACE] <<< {result}")
         return result
 
-    def __read_serial(self):
+    def _get_from_ace(self):
         max_retries = 3
         retry_delay = 1
         self._data = None
@@ -137,13 +141,13 @@ class DuckAce:
 
         return self._data
 
-    def _get_from_ace(self):
-        thread = threading.Thread(target=self.__read_serial, daemon=True)
-        thread.start()
-        thread.join(self.__read_timeout)
+    # def _get_from_ace(self):
+    #     thread = threading.Thread(target=self.__read_serial, daemon=True)
+    #     thread.start()
+    #     thread.join(self.__read_timeout)
 
-        if thread.is_alive():  # 判断是否超时
-            raise TimeoutError("读取超时！")
+    #     if thread.is_alive():  # 判断是否超时
+    #         raise TimeoutError("读取超时！")
 
         return self._data
 
@@ -262,7 +266,7 @@ class DuckAce:
         self.__wait_action_finish(timeout=(length / speed + 10))
 
     # TODO: Zhang Gaofan
-    def cmd_ACE_GET_STATUS(self, index):
+    def cmd_ACE_GET_STATUS(self):
         self._get_status()
 
     # TODO: Zhang Gaofan
@@ -363,12 +367,16 @@ if __name__ == "__main__":
     ace = DuckAce()
     ace.start()
 
-    ace.cmd_GET_FILAMENT_INFO()
+    # ace.cmd_GET_FILAMENT_INFO()
 
-    # ace.cmd_ACE_FEED(0, 20)
-    time.sleep(5)
-    ace.cmd_ACE_RETRACT(2, 200)
-    time.sleep(1)
-    # ace.cmd_ACE_FEED(2, 20)
+    # # ace.cmd_ACE_FEED(0, 20)
+    # time.sleep(5)
+    # ace.cmd_ACE_RETRACT(2, 200)
+    # time.sleep(1)
+    # # ace.cmd_ACE_FEED(2, 20)
 
-    ace.cmd_GET_FILAMENT_INFO()
+    # ace.cmd_GET_FILAMENT_INFO()
+
+    while True:
+        ace.cmd_ACE_GET_STATUS()
+        time.sleep(1)
