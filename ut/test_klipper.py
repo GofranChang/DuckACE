@@ -426,6 +426,7 @@ class DuckAce:
         while not bool(sensor_extruder.runout_helper.filament_present):
             self.__feed(index, 10, 10)
             bowden_length += 2
+            time.sleep(0.5)
             self.gcode.respond_info(f"[ACE] channel {index} bowden length {bowden_length} {sensor_extruder.runout_helper}")
 
     def cmd_ACE_CALIBRATE_HUB_TO_TOOLHEAD_BOWON_LENGTH(self):
