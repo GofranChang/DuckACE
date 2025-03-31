@@ -145,7 +145,7 @@ class DuckAce:
             except serial.SerialException as e:
                 self.gcode.respond_info(f'[ACE] serial send exception {e}')
                 self._reconnect_serial()
-                self.dwell(2 ** i)
+                self.pause(2 ** i)
 
     def _read_with_retry(self, expected, size, retry_times=3):
         for i in range(0, retry_times):
@@ -155,7 +155,6 @@ class DuckAce:
             except serial.SerialException as e:
                 self.gcode.respond_info(f'[ACE] serial read exception {e}')
                 self._reconnect_serial()
-                # self.dwell(2 ** i)
 
         return None
 
@@ -293,11 +292,11 @@ class DuckAce:
                         new_assist_count = self._info['feed_assist_count']
                         if new_assist_count > self._last_assist_count:
                             self._last_assist_count = new_assist_count
-                            self.dwell(0.7, True) # 0.68 + small room 0.02 for response
+                            self.pause(0.7, True) # 0.68 + small room 0.02 for response
                             self._assist_hit_count = 0
                         elif self._assist_hit_count < self.park_hit_count:
                             self._assist_hit_count += 1
-                            self.dwell(0.7, True)
+                            self.pause(0.7, True)
                         else:
                             self._assist_hit_count = 0
                             self._park_in_progress = False
@@ -383,16 +382,17 @@ class DuckAce:
 
     def wait_ace_ready(self):
         while self._info['status'] != 'ready':
-            self.dwell(delay=0.5)
+            self.pause(delay=0.5)
 
 
     def send_request(self, request, callback, with_retry=True):
         self._queue.put([request, callback, with_retry])
 
 
-    def dwell(self, delay = 1., on_main = False):
+    def pause(self, delay = 1., on_main = False):
         def main_callback():
-            self.toolhead.dwell(delay)
+            event_time = self.reactor.monotonic()
+            self.reactor.pause(event_time + delay)
 
         if on_main:
             self._main_queue.put(main_callback)
@@ -451,7 +451,7 @@ class DuckAce:
                 self.gcode.respond_info(str(response))
 
         self.send_request(request = {'method': 'start_feed_assist', 'params': {'index': index}}, callback = callback)
-        self.dwell(delay = 0.7)
+        self.pause(delay = 0.7)
 
     cmd_ACE_ENABLE_FEED_ASSIST_help = 'Enables ACE feed assist'
     def cmd_ACE_ENABLE_FEED_ASSIST(self, gcmd):
@@ -472,7 +472,7 @@ class DuckAce:
             self.gcode.respond_info('Disabled ACE feed assist')
 
         self.send_request(request = {'method': 'stop_feed_assist', 'params': {'index': index}}, callback = callback)
-        self.dwell(0.3)
+        self.pause(0.3)
 
     cmd_ACE_DISABLE_FEED_ASSIST_help = 'Disables ACE feed assist'
     def cmd_ACE_DISABLE_FEED_ASSIST(self, gcmd):
@@ -494,7 +494,7 @@ class DuckAce:
                 raise ValueError('ACE Error: ' + response['msg'])
 
         self.send_request(request = {'method': 'feed_filament', 'params': {'index': index, 'length': length, 'speed': speed}}, callback = callback)
-        self.dwell(delay = (length / speed) + 0.1)
+        self.pause((length / speed) + 0.1)
 
     cmd_ACE_FEED_help = 'Feeds filament from ACE'
     def cmd_ACE_FEED(self, gcmd):
@@ -520,7 +520,7 @@ class DuckAce:
         self.send_request(
             request={'method': 'unwind_filament', 'params': {'index': index, 'length': length, 'speed': speed}},
             callback=callback)
-        self.dwell(delay=(length / speed) + 0.1)
+        self.pause(delay=(length / speed) + 0.1)
 
     cmd_ACE_RETRACT_help = 'Retracts filament back to ACE'
     def cmd_ACE_RETRACT(self, gcmd):
@@ -544,7 +544,7 @@ class DuckAce:
         self._enable_feed_assist(tool)
 
         while not bool(sensor_extruder.runout_helper.filament_present):
-            self.dwell(delay=0.1)
+            self.pause(delay=0.1)
 
         if not bool(sensor_extruder.runout_helper.filament_present):
             raise ValueError('Filament stuck ' + str(bool(sensor_extruder.runout_helper.filament_present)))
@@ -572,7 +572,7 @@ class DuckAce:
             while bool(sensor_extruder.runout_helper.filament_present):
                 self._extruder_move(-20, 5)
                 self._retract(index, 20, self.retract_speed)
-                self.dwell(1)
+                self.pause(1)
             self.variables['ace_filament_pos'] = 'bowden'
 
         self.wait_ace_ready()
