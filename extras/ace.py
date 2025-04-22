@@ -13,32 +13,30 @@ class DuckAce:
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
         self.gcode = self.printer.lookup_object('gcode')
-        self._name = config.get_name()
-        if self._name.startswith('ace '):
-            self._name = self._name[4:]
+
         self.variables = self.printer.lookup_object('save_variables').allVariables
 
         self.serial_name = config.get('serial', '/dev/ttyACM0')
         self.baud = config.getint('baud', 115200)
         extruder_sensor_pin = config.get('extruder_sensor_pin', None)
         toolhead_sensor_pin = config.get('toolhead_sensor_pin', None)
+
         self.feed_speed = config.getint('feed_speed', 50)
         self.retract_speed = config.getint('retract_speed', 50)
+
         self.toolchange_retract_length = config.getint('toolchange_retract_length', 100)
+
         self.max_dryer_temperature = config.getint('max_dryer_temperature', 55)
         self.disable_assist_after_toolchange = config.getboolean('disable_assist_after_toolchange', False)
 
         self._callback_map = {}
         self.park_hit_count = 5
-        self._feed_assist_index = -1
+        self._feed_assist_channel = -1
         self._last_assist_count = 0
         self._assist_hit_count = 0
-        self._park_in_progress = False
         self._park_is_toolchange = False
         self._park_previous_tool = -1
         self._park_index = -1
-
-        self._last_get_ace_response_time = None
 
         # Default data to prevent exceptions
         self._info = {
@@ -88,6 +86,7 @@ class DuckAce:
 
         self._create_mmu_sensor(config, extruder_sensor_pin, 'extruder_sensor')
         self._create_mmu_sensor(config, toolhead_sensor_pin, 'toolhead_sensor')
+
         self.printer.register_event_handler('klippy:ready', self._handle_ready)
         self.printer.register_event_handler('klippy:disconnect', self._handle_disconnect)
 
@@ -146,7 +145,7 @@ class DuckAce:
 
         logging.info('ACE: Connected to ' + self.serial_name)
 
-        self._queue = PeekableQueue()
+        self._serial_task_queue = PeekableQueue()
         self.serial_timer = self.reactor.register_timer(self._serial_read_write, self.reactor.NOW)
 
         self._main_queue = queue.Queue()
@@ -166,7 +165,7 @@ class DuckAce:
         self._main_queue = None
         self.reactor.unregister_timer(self.main_timer)
 
-        self._queue = None
+        self._serial_task_queue = None
         self.reactor.unregister_timer(self.serial_timer)
 
     def _calc_crc(self, buffer):
@@ -235,8 +234,8 @@ class DuckAce:
             if self._serial.isOpen():
                 self._connected = True
 
-                if self._feed_assist_index != -1:
-                    self._enable_feed_assist(self._feed_assist_index)
+                if self._feed_assist_channel != -1:
+                    self._enable_feed_assist(self._feed_assist_channel)
                 self.gcode.respond_info('[ACE] Reconnected successfully.')
                 return True
         except Exception as e:
@@ -246,30 +245,9 @@ class DuckAce:
 
     def _send_heartbeat(self, id):
         def callback(self, response):
-            if response is not None:
-                self._info = response['result']
-
-                if self._park_in_progress and self._info['status'] == 'ready':
-                    new_assist_count = self._info['feed_assist_count']
-                    if new_assist_count > self._last_assist_count:
-                        self._last_assist_count = new_assist_count
-                        self.dwell(0.7, True) # 0.68 + small room 0.02 for response
-                        self._assist_hit_count = 0
-                    elif self._assist_hit_count < self.park_hit_count:
-                        self._assist_hit_count += 1
-                        self.dwell(0.7, True)
-                    else:
-                        self._assist_hit_count = 0
-                        self._park_in_progress = False
-                        logging.info('ACE: Parked to toolhead with assist count: ' + str(self._last_assist_count))
-
-                        if self._park_is_toolchange:
-                            self._park_is_toolchange = False
-                            def main_callback():
-                                self.gcode.run_script_from_command('_ACE_POST_TOOLCHANGE FROM=' + str(self._park_previous_tool) + ' TO=' + str(self._park_index))
-                            self._main_queue.put(main_callback)
-                        else:
-                            self.send_request(request = {'method': 'stop_feed_assist', 'params': {'index': self._park_index}}, callback=None)
+            if response == None:
+                return
+            self._info = response['result']
 
         self._callback_map[id] = callback
         if not self._write_serial({'id': id, 'method': 'get_status'}):
@@ -277,6 +255,30 @@ class DuckAce:
 
         return True
 
+    def _writer(self):
+        id = self._update_and_get_request_id()
+
+        if not self._serial_task_queue.empty():
+            task = self._serial_task_queue.peek()
+            if task is not None:
+                task[0]['id'] = id
+                self._callback_map[id] = task[1]
+
+                if not self._write_serial(task[0]):
+                    if not task[2]:
+                        # Not Retry
+                        self._serial_task_queue.get()
+
+                    return None
+
+                self._serial_task_queue.get()
+
+        else:
+            if not self._send_heartbeat(id):
+                return None
+
+        return id
+    
     def _reader(self):
         data = None
 
@@ -324,30 +326,6 @@ class DuckAce:
 
         return id
 
-    def _writer(self):
-        id = self._update_and_get_request_id()
-
-        if not self._queue.empty():
-            task = self._queue.peek()
-            if task is not None:
-                task[0]['id'] = id
-                self._callback_map[id] = task[1]
-
-                if not self._write_serial(task[0]):
-                    if not task[2]:
-                        # Not Retry
-                        self._queue.get()
-
-                    return None
-
-                self._queue.get()
-
-        else:
-            if not self._send_heartbeat(id):
-                return None
-
-        return id
-
     def _serial_read_write(self, eventtime):
         if self._connected:
             send_id = self._writer()
@@ -363,11 +341,8 @@ class DuckAce:
             self._reconnect_serial()
             return eventtime + 1
 
-        if self._park_in_progress:
-            next_time = 0.68
-        else:
-            next_time = 0.25
-        return eventtime + next_time
+        return eventtime + 0.25
+
 
     def wait_ace_ready(self):
         while self._info['status'] != 'ready':
@@ -375,10 +350,10 @@ class DuckAce:
 
 
     def send_request(self, request, callback, with_retry=True):
-        self._queue.put([request, callback, with_retry])
+        self._serial_task_queue.put([request, callback, with_retry])
 
 
-    def dwell(self, delay = 1., on_main = False):
+    def dwell(self, delay=1., on_main=False):
         def main_callback():
             self.toolhead.dwell(delay)
 
@@ -400,22 +375,22 @@ class DuckAce:
         config.fileconfig.set(section, 'pause_on_runout', 'False')
         fs = self.printer.load_object(config, section)
 
-    def _feed(self, index, length, speed):
-        def callback(self, response):
-            if 'code' in response and response['code'] != 0:
+    def check_code_cb(response):
+        if 'code' not in response or response['code'] != 0:
                 raise ValueError('ACE Error: ' + response['msg'])
 
-        self.send_request(request = {'method': 'feed_filament', 'params': {'index': index, 'length': length, 'speed': speed}}, callback = callback)
-        self.dwell(delay = (length / speed) + 0.1)
+    def _feed(self, index, length, speed):
+        self.send_request(
+            request = {'method': 'feed_filament', 'params': {'index': index, 'length': length, 'speed': speed}}, 
+            callback = DuckAce.check_code_cb
+        )
+        self.dwell((length / speed) + 0.1)
 
     def _retract(self, index, length, speed):
-        def callback(self, response):
-            if 'code' in response and response['code'] != 0:
-                raise ValueError('ACE Error: ' + response['msg'])
-
         self.send_request(
             request={'method': 'unwind_filament', 'params': {'index': index, 'length': length, 'speed': speed}},
-            callback=callback)
+            callback=DuckAce.check_code_cb
+        )
         self.dwell(delay=(length / speed) + 0.1)
 
     def _enable_feed_assist(self, index):
@@ -423,18 +398,18 @@ class DuckAce:
             if 'code' in response and response['code'] != 0:
                 raise ValueError('ACE Error: ' + response['msg'])
             else:
-                self._feed_assist_index = index
-                # self.gcode.respond_info(str(response))
+                self._feed_assist_channel = index
+                self.gcode.respond_info('Enable ACE feed assist')
 
         self.send_request(request = {'method': 'start_feed_assist', 'params': {'index': index}}, callback = callback)
-        self.dwell(delay = 0.7)
+        self.dwell(0.7)
 
     def _disable_feed_assist(self, index):
         def callback(self, response):
             if 'code' in response and response['code'] != 0:
                 raise self.gcode.error('ACE Error: ' + response['msg'])
 
-            self._feed_assist_index = -1
+            self._feed_assist_channel = -1
             self.gcode.respond_info('Disabled ACE feed assist')
 
         self.send_request(request = {'method': 'stop_feed_assist', 'params': {'index': index}}, callback = callback)
@@ -471,6 +446,7 @@ class DuckAce:
 
         self._disable_feed_assist(index)
         self.wait_ace_ready()
+
         if  self.variables.get('ace_filament_pos', 'spliter') == 'nozzle':
             self.gcode.respond_info(f'ACE: cut tool {index}')
             self.gcode.run_script_from_command('CUT_TIP')
@@ -481,7 +457,7 @@ class DuckAce:
             while bool(sensor_extruder.runout_helper.filament_present):
                 self._extruder_move(-20, 5)
                 self._retract(index, 20, self.retract_speed)
-                self.dwell(1)
+                self.dwell(0.5)
             self.variables['ace_filament_pos'] = 'bowden'
 
         self.wait_ace_ready()
@@ -539,8 +515,8 @@ class DuckAce:
 
     cmd_ACE_DISABLE_FEED_ASSIST_help = 'Disables ACE feed assist'
     def cmd_ACE_DISABLE_FEED_ASSIST(self, gcmd):
-        if self._feed_assist_index != -1:
-            index = gcmd.get_int('INDEX', self._feed_assist_index)
+        if self._feed_assist_channel != -1:
+            index = gcmd.get_int('INDEX', self._feed_assist_channel)
         else:
             index = gcmd.get_int('INDEX')
 
