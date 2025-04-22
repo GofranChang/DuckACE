@@ -27,7 +27,6 @@ class DuckAce:
         self.toolchange_retract_length = config.getint('toolchange_retract_length', 100)
 
         self.max_dryer_temperature = config.getint('max_dryer_temperature', 55)
-        self.disable_assist_after_toolchange = config.getboolean('disable_assist_after_toolchange', False)
 
         self._callback_map = {}
         self.park_hit_count = 5
@@ -148,9 +147,6 @@ class DuckAce:
         self._serial_task_queue = PeekableQueue()
         self.serial_timer = self.reactor.register_timer(self._serial_read_write, self.reactor.NOW)
 
-        self._main_queue = queue.Queue()
-        self.main_timer = self.reactor.register_timer(self._main_eval, self.reactor.NOW)
-
         def info_callback(self, response):
             res = response['result']
             self.gcode.respond_info('Connected ' + res['model'] + ' ' + res['firmware'])
@@ -161,9 +157,6 @@ class DuckAce:
         logging.info('ACE: Closing connection to ' + self.serial_name)
         self._serial.close()
         self._connected = False
-
-        self._main_queue = None
-        self.reactor.unregister_timer(self.main_timer)
 
         self._serial_task_queue = None
         self.reactor.unregister_timer(self.serial_timer)
@@ -210,14 +203,6 @@ class DuckAce:
 
         return True
 
-
-    def _main_eval(self, eventtime):
-        while not self._main_queue.empty():
-            task = self._main_queue.get_nowait()
-            if task is not None:
-                task()
-
-        return eventtime + 0.25
 
     def _reconnect_serial(self):
         if self._connected:
@@ -353,14 +338,8 @@ class DuckAce:
         self._serial_task_queue.put([request, callback, with_retry])
 
 
-    def dwell(self, delay=1., on_main=False):
-        def main_callback():
-            self.toolhead.dwell(delay)
-
-        if on_main:
-            self._main_queue.put(main_callback)
-        else:
-            main_callback()
+    def dwell(self, delay=1.):
+        self.toolhead.dwell(delay)
 
     def _extruder_move(self, length, speed):
         pos = self.toolhead.get_position()
@@ -416,8 +395,8 @@ class DuckAce:
         self.dwell(0.3)
 
     def _park_to_toolhead(self, tool):
-        sensor_extruder = self.printer.lookup_object('filament_switch_sensor %s' % 'extruder_sensor', None)
-        sensor_toolhead = self.printer.lookup_object('filament_switch_sensor %s' % 'toolhead_sensor', None)
+        sensor_extruder = self.printer.lookup_object('filament_switch_sensor extruder_sensor', None)
+        sensor_toolhead = self.printer.lookup_object('filament_switch_sensor toolhead_sensor', None)
 
         self._enable_feed_assist(tool)
 
@@ -437,12 +416,9 @@ class DuckAce:
         # The nozzle should be cleaned by brushing
         self.variables['ace_filament_pos'] = 'nozzle'
 
-        if self.disable_assist_after_toolchange:
-            self.send_request({"method": "stop_feed_assist", "params": {"index": tool}}, callback=None)
-
     def _reject_tool(self, index):
         self.gcode.respond_info(f'ACE: reject tool {index}')
-        sensor_extruder = self.printer.lookup_object('filament_switch_sensor %s' % 'extruder_sensor', None)
+        sensor_extruder = self.printer.lookup_object(f'filament_switch_sensor extruder_sensor', None)
 
         self._disable_feed_assist(index)
         self.wait_ace_ready()
@@ -580,6 +556,9 @@ class DuckAce:
         was = self.variables.get('ace_current_index', -1)
         if was == tool:
             gcmd.respond_info('ACE: Not changing tool, current index already ' + str(tool))
+
+            if -1 == self._feed_assist_channel:
+                self._enable_feed_assist(tool)
             return
 
         if tool != -1:
