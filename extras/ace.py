@@ -3,7 +3,7 @@ from datetime import datetime
 
 class PeekableQueue(queue.Queue):
     def peek(self):
-        with self.mutex:  # 使用内部锁保证线程安全
+        with self.mutex:
             if len(self.queue) == 0:
                 return None
             return self.queue[0]
@@ -263,7 +263,7 @@ class DuckAce:
                 return None
 
         return id
-    
+
     def _reader(self):
         data = None
 
@@ -307,7 +307,7 @@ class DuckAce:
         if id in self._callback_map:
             callback = self._callback_map.pop(id)
             if callback != None:
-                callback(self = self, response = ret)
+                callback(self=self, response = ret)
 
         return id
 
@@ -354,13 +354,13 @@ class DuckAce:
         config.fileconfig.set(section, 'pause_on_runout', 'False')
         fs = self.printer.load_object(config, section)
 
-    def check_code_cb(response):
+    def check_code_cb(self, response):
         if 'code' not in response or response['code'] != 0:
-                raise ValueError('ACE Error: ' + response['msg'])
+            raise ValueError('ACE Error: ' + response['msg'])
 
     def _feed(self, index, length, speed):
         self.send_request(
-            request = {'method': 'feed_filament', 'params': {'index': index, 'length': length, 'speed': speed}}, 
+            request = {'method': 'feed_filament', 'params': {'index': index, 'length': length, 'speed': speed}},
             callback = DuckAce.check_code_cb
         )
         self.dwell((length / speed) + 0.1)
