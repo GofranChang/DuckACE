@@ -95,54 +95,70 @@ class DuckAce:
         )
         self.gcode.register_command(
             'ACE_START_DRYING', self.cmd_ACE_START_DRYING,
-            desc=self.cmd_ACE_START_DRYING_help)
+            desc=self.cmd_ACE_START_DRYING_help
+        )
         self.gcode.register_command(
             'ACE_STOP_DRYING', self.cmd_ACE_STOP_DRYING,
-            desc=self.cmd_ACE_STOP_DRYING_help)
+            desc=self.cmd_ACE_STOP_DRYING_help
+        )
         self.gcode.register_command(
             'ACE_ENABLE_FEED_ASSIST', self.cmd_ACE_ENABLE_FEED_ASSIST,
-            desc=self.cmd_ACE_ENABLE_FEED_ASSIST_help)
+            desc=self.cmd_ACE_ENABLE_FEED_ASSIST_help
+        )
         self.gcode.register_command(
             'ACE_DISABLE_FEED_ASSIST', self.cmd_ACE_DISABLE_FEED_ASSIST,
-            desc=self.cmd_ACE_DISABLE_FEED_ASSIST_help)
+            desc=self.cmd_ACE_DISABLE_FEED_ASSIST_help
+        )
         self.gcode.register_command(
             'ACE_FEED', self.cmd_ACE_FEED,
-            desc=self.cmd_ACE_FEED_help)
+            desc=self.cmd_ACE_FEED_help
+        )
         self.gcode.register_command(
             'ACE_RETRACT', self.cmd_ACE_RETRACT,
-            desc=self.cmd_ACE_RETRACT_help)
+            desc=self.cmd_ACE_RETRACT_help
+        )
         self.gcode.register_command(
             'ACE_REJECT_TOOL', self.cmd_ACE_REJECT_TOOL,
-            desc=self.cmd_ACE_REJECT_TOOL_help)
+            desc=self.cmd_ACE_REJECT_TOOL_help
+        )
         self.gcode.register_command(
             'ACE_CHANGE_TOOL', self.cmd_ACE_CHANGE_TOOL,
-            desc=self.cmd_ACE_CHANGE_TOOL_help)
+            desc=self.cmd_ACE_CHANGE_TOOL_help
+        )
         self.gcode.register_command(
             'ACE_FILAMENT_STATUS', self.cmd_ACE_FILAMENT_STATUS,
-            desc=self.cmd_ACE_FILAMENT_STATUS_help)
+            desc=self.cmd_ACE_FILAMENT_STATUS_help
+        )
         self.gcode.register_command(
             'ACE_CLEAR_ALL_STATUS', self.cmd_ACE_CLEAR_ALL_STATUS,
-            desc=self.cmd_ACE_CLEAR_ALL_STATUS_help)
+            desc=self.cmd_ACE_CLEAR_ALL_STATUS_help
+        )
         self.gcode.register_command(
             'ACE_DEBUG', self.cmd_ACE_DEBUG,
-            desc=self.cmd_ACE_DEBUG_help)
+            desc=self.cmd_ACE_DEBUG_help
+        )
 
     def _handle_ready(self):
         self.toolhead = self.printer.lookup_object('toolhead')
 
-        logging.info('ACE: Connecting to ' + self.serial_name)
+        logging.info(f'ACE: Connecting to {self.serial_name}')
 
         self._request_id = 0
         self._connected = False
         self._serial = None
+
+        start_time = time.time()
         while not self._connected:
+            if time.time() - start_time > 30:
+                raise TimeoutError('Connect to ACE failed')
+
             self._reconnect_serial()
             self.reactor.pause(0.5)
 
         if not self._connected:
-            raise ValueError('ACE: Failed to connect to ' + self.serial_name)
+            raise ValueError(f'ACE: Failed to connect to {self.serial_name}')
 
-        logging.info('ACE: Connected to ' + self.serial_name)
+        logging.info(f'ACE: Connected to {self.serial_name}')
 
         self._serial_task_queue = PeekableQueue()
         self.serial_timer = self.reactor.register_timer(self._serial_read_write, self.reactor.NOW)
@@ -192,8 +208,8 @@ class DuckAce:
         data += struct.pack('@H', self._calc_crc(payload))
         data += bytes([0xFE])
 
-        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        logging.info(f'[ACE] {now} >>> {request}')
+        # now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # logging.info(f'[ACE] {now} >>> {request}')
 
         try:
             self._serial.write(data)
@@ -202,7 +218,6 @@ class DuckAce:
             return False
 
         return True
-
 
     def _reconnect_serial(self):
         if self._connected:
@@ -227,14 +242,15 @@ class DuckAce:
             logging.warning(f'[ACE] reconnect error: {e}')
 
         return False
+    
+    def general_cb(self, response):
+        if 'code' not in response or response['code'] != 0:
+            raise ValueError('ACE Error: ' + response['msg'])
+        
+        self._info = response['result']
 
     def _send_heartbeat(self, id):
-        def callback(self, response):
-            if response == None:
-                return
-            self._info = response['result']
-
-        self._callback_map[id] = callback
+        self._callback_map[id] = self.general_cb
         if not self._write_serial({'id': id, 'method': 'get_status'}):
             return False
 
@@ -307,7 +323,7 @@ class DuckAce:
         if id in self._callback_map:
             callback = self._callback_map.pop(id)
             if callback != None:
-                callback(self=self, response = ret)
+                callback(response=ret)
 
         return id
 
@@ -354,21 +370,17 @@ class DuckAce:
         config.fileconfig.set(section, 'pause_on_runout', 'False')
         fs = self.printer.load_object(config, section)
 
-    def check_code_cb(self, response):
-        if 'code' not in response or response['code'] != 0:
-            raise ValueError('ACE Error: ' + response['msg'])
-
     def _feed(self, index, length, speed):
         self.send_request(
             request = {'method': 'feed_filament', 'params': {'index': index, 'length': length, 'speed': speed}},
-            callback = DuckAce.check_code_cb
+            callback = self.general_cb
         )
         self.dwell((length / speed) + 0.1)
 
     def _retract(self, index, length, speed):
         self.send_request(
             request={'method': 'unwind_filament', 'params': {'index': index, 'length': length, 'speed': speed}},
-            callback=DuckAce.check_code_cb
+            callback = self.general_cb
         )
         self.dwell(delay=(length / speed) + 0.1)
 
@@ -380,7 +392,7 @@ class DuckAce:
                 self._feed_assist_channel = index
                 self.gcode.respond_info('Enable ACE feed assist')
 
-        self.send_request(request = {'method': 'start_feed_assist', 'params': {'index': index}}, callback = callback)
+        self.send_request(request = {'method': 'start_feed_assist', 'params': {'index': index}}, callback=callback)
         self.dwell(0.7)
 
     def _disable_feed_assist(self, index):
@@ -391,7 +403,7 @@ class DuckAce:
             self._feed_assist_channel = -1
             self.gcode.respond_info('Disabled ACE feed assist')
 
-        self.send_request(request = {'method': 'stop_feed_assist', 'params': {'index': index}}, callback = callback)
+        self.send_request(request = {'method': 'stop_feed_assist', 'params': {'index': index}}, callback=callback)
         self.dwell(0.3)
 
     def _park_to_toolhead(self, tool):
@@ -467,7 +479,7 @@ class DuckAce:
 
             self.gcode.respond_info('Started ACE drying')
 
-        self.send_request(request = {'method': 'drying', 'params': {'temp':temperature, 'fan_speed': 7000, 'duration': duration}}, callback = callback)
+        self.send_request(request = {'method': 'drying', 'params': {'temp':temperature, 'fan_speed': 7000, 'duration': duration}}, callback=callback)
 
 
     cmd_ACE_STOP_DRYING_help = 'Stops ACE Pro dryer'
@@ -478,7 +490,7 @@ class DuckAce:
 
             self.gcode.respond_info('Stopped ACE drying')
 
-        self.send_request(request = {'method':'drying_stop'}, callback = callback)
+        self.send_request(request = {'method':'drying_stop'}, callback=callback)
 
     cmd_ACE_ENABLE_FEED_ASSIST_help = 'Enables ACE feed assist'
     def cmd_ACE_ENABLE_FEED_ASSIST(self, gcmd):
@@ -616,7 +628,7 @@ class DuckAce:
             def callback(self, response):
                 self.gcode.respond_info(str(response))
 
-            self.send_request(request = {'method': method, 'params': json.loads(params)}, callback = callback)
+            self.send_request(request = {'method': method, 'params': json.loads(params)}, callback=callback)
         except Exception as e:
             self.gcode.respond_info('Error: ' + str(e))
 
