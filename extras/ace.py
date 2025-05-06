@@ -281,11 +281,11 @@ class DuckAce:
             logging.info(f'[ACE] Read Too short')
             return None
 
-        if data[0:2] != b"\xFF\xAA":
+        if data[0:2] != b'\xFF\xAA':
             logging.info(f'[ACE] Read invalid header')
             return None
 
-        payload_length = struct.unpack("@H", data[2:4])[0]
+        payload_length = struct.unpack('@H', data[2:4])[0]
         payload = data[4 : 4 + payload_length]
         # crc_received = data[4 + payload_length : 4 + payload_length + 2]
 
@@ -295,7 +295,7 @@ class DuckAce:
         #     return None
 
         try:
-            json_str = payload.decode("utf-8")
+            json_str = payload.decode('utf-8')
             ret = json.loads(json_str)
         except Exception as e:
             logging.info(f'[ACE] Read invalid JSON')
